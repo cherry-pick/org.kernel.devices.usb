@@ -55,74 +55,71 @@ static long manager_new(Manager **mp) {
 }
 
 static long org_kernel_devices_usb_Info(VarlinkConnection *connection,
-                                        VarlinkVariant *parameters,
+                                        VarlinkStruct *parameters,
                                         void *userdata) {
-        uint8_t busnum, devnum;
+        int64_t busnum, devnum;
         _cleanup_(usb_device_unrefp) USBDevice *usb_device = NULL;
-        _cleanup_(varlink_variant_unrefp) VarlinkVariant *device = NULL;
+        _cleanup_(varlink_struct_unrefp) VarlinkStruct *device = NULL;
         long r;
 
-        if (varlink_variant_struct_get_uint8(parameters, "bus_nr", &busnum) < 0 ||
-            varlink_variant_struct_get_uint8(parameters, "device_nr", &devnum) < 0)
-                return varlink_connection_reply_error(connection, ENOENT);
+        if (varlink_struct_get_int(parameters, "bus_nr", &busnum) < 0 ||
+            varlink_struct_get_int(parameters, "device_nr", &devnum) < 0)
+                return varlink_connection_reply_error(connection, "Invalid arguments");
 
         r = usb_device_sysfs_find(&usb_device, busnum, devnum);
         if (r < 0)
-                return varlink_connection_reply_error(connection, -r);
+                return varlink_connection_reply_error(connection, "Error finding device: %s", strerror(-r));
 
-        if (varlink_variant_new(&device, varlink_connection_get_interface(connection), "Device") < 0 ||
-            varlink_variant_struct_set_uint16(device, "vendor_id", usb_device->id_vendor) < 0 ||
-            varlink_variant_struct_set_uint16(device, "product_id", usb_device->id_product) < 0 ||
-            varlink_variant_struct_set_uint8(device, "bus_nr", usb_device->busnum) < 0 ||
-            varlink_variant_struct_set_uint8(device, "device_nr", usb_device->devnum) < 0 ||
-            varlink_variant_struct_set_string(device, "product", usb_device->product ?: "") < 0 ||
-            varlink_variant_struct_set_string(device, "manufacturer", usb_device->manufacturer ?: "") < 0 ||
-            varlink_variant_struct_set_string(device, "serial", usb_device->serial ?: "") < 0)
+        if (varlink_struct_new(&device) < 0 ||
+            varlink_struct_set_int(device, "vendor_id", usb_device->id_vendor) < 0 ||
+            varlink_struct_set_int(device, "product_id", usb_device->id_product) < 0 ||
+            varlink_struct_set_int(device, "bus_nr", usb_device->busnum) < 0 ||
+            varlink_struct_set_int(device, "device_nr", usb_device->devnum) < 0 ||
+            varlink_struct_set_string(device, "product", usb_device->product ?: "") < 0 ||
+            varlink_struct_set_string(device, "manufacturer", usb_device->manufacturer ?: "") < 0 ||
+            varlink_struct_set_string(device, "serial", usb_device->serial ?: "") < 0)
                 return -EUCLEAN;
 
         return varlink_connection_reply(connection, device);
 }
 
 static long usb_device_add(USBDevice *usb_device, void *userdata) {
-        VarlinkVariant *devices = userdata;
-        VarlinkInterface *interface = varlink_type_get_interface(varlink_variant_get_type(devices));
-        _cleanup_(varlink_variant_unrefp) VarlinkVariant *device = NULL;
+        VarlinkArray *devices = userdata;
+        _cleanup_(varlink_struct_unrefp) VarlinkStruct *device = NULL;
 
-        if (varlink_variant_new(&device, interface, "Device") < 0 ||
-            varlink_variant_struct_set_uint16(device, "vendor_id", usb_device->id_vendor) < 0 ||
-            varlink_variant_struct_set_uint16(device, "product_id", usb_device->id_product) < 0 ||
-            varlink_variant_struct_set_uint8(device, "bus_nr", usb_device->busnum) < 0 ||
-            varlink_variant_struct_set_uint8(device, "device_nr", usb_device->devnum) < 0 ||
-            varlink_variant_struct_set_string(device, "product", usb_device->product ?: "") < 0 ||
-            varlink_variant_struct_set_string(device, "manufacturer", usb_device->manufacturer ?: "") < 0 ||
-            varlink_variant_struct_set_string(device, "serial", usb_device->serial ?: ""))
+        if (varlink_struct_new(&device) < 0 ||
+            varlink_struct_set_int(device, "vendor_id", usb_device->id_vendor) < 0 ||
+            varlink_struct_set_int(device, "product_id", usb_device->id_product) < 0 ||
+            varlink_struct_set_int(device, "bus_nr", usb_device->busnum) < 0 ||
+            varlink_struct_set_int(device, "device_nr", usb_device->devnum) < 0 ||
+            varlink_struct_set_string(device, "product", usb_device->product ?: "") < 0 ||
+            varlink_struct_set_string(device, "manufacturer", usb_device->manufacturer ?: "") < 0 ||
+            varlink_struct_set_string(device, "serial", usb_device->serial ?: ""))
                 return -EUCLEAN;
 
-        return varlink_variant_array_append(devices, device);
+        return varlink_array_append_struct(devices, device);
 }
 
 static long org_kernel_devices_usb_Monitor(VarlinkConnection *connection,
-                                           VarlinkVariant *parameters,
+                                           VarlinkStruct *parameters,
                                            void *userdata) {
-        _cleanup_(varlink_variant_unrefp) VarlinkVariant *devices = NULL;
-        _cleanup_(varlink_variant_unrefp) VarlinkVariant *reply = NULL;
+        _cleanup_(varlink_array_unrefp) VarlinkArray *devices = NULL;
+        _cleanup_(varlink_struct_unrefp) VarlinkStruct *reply = NULL;
         long r;
 
-        r = varlink_variant_new(&devices, varlink_connection_get_interface(connection), "Device[]");
+        r = varlink_array_new(&devices);
         if (r < 0)
-                return varlink_connection_reply_error(connection, -r);
+                return varlink_connection_reply_error(connection, "Error: %s", strerror(-r));
 
         /* Add all current devices to the array */
         r = usb_device_sysfs_enumerate(usb_device_add, devices);
         if (r < 0)
-                return varlink_connection_reply_error(connection, -r);
+                return varlink_connection_reply_error(connection, "Error: %s", strerror(-r));
 
-        if (varlink_variant_new(&reply,
-                                varlink_connection_get_interface(connection),
-                                "(event: string, devices: Device[])") < 0 ||
-            varlink_variant_struct_set_string(reply, "event", "current") < 0 ||
-            varlink_variant_struct_set(reply, "devices", devices))
-                return varlink_connection_reply_error(connection, EUCLEAN);
+        if (varlink_struct_new(&reply) < 0 ||
+            varlink_struct_set_string(reply, "event", "current") < 0 ||
+            varlink_struct_set_array(reply, "devices", devices))
+                return varlink_connection_reply_error(connection, "Error");
 
         return varlink_connection_reply(connection, reply);
 }
@@ -130,9 +127,9 @@ static long org_kernel_devices_usb_Monitor(VarlinkConnection *connection,
 static long usb_monitor(Manager *m, const char *action, USBDevice *usb_device) {
         VarlinkConnection **connections;
         int n_connections, i;
-        _cleanup_(varlink_variant_unrefp) VarlinkVariant *device = NULL;
-        _cleanup_(varlink_variant_unrefp) VarlinkVariant *devices = NULL;
-        _cleanup_(varlink_variant_unrefp) VarlinkVariant *reply = NULL;
+        _cleanup_(varlink_struct_unrefp) VarlinkStruct *device = NULL;
+        _cleanup_(varlink_array_unrefp) VarlinkArray *devices = NULL;
+        _cleanup_(varlink_struct_unrefp) VarlinkStruct *reply = NULL;
 
         n_connections = varlink_server_get_monitor_connections(m->server,
                                                                "org.kernel.devices.usb.Monitor",
@@ -140,25 +137,22 @@ static long usb_monitor(Manager *m, const char *action, USBDevice *usb_device) {
         if (n_connections <= 0)
                 return 0;
 
-        if (varlink_variant_new(&device, varlink_connection_get_interface(connections[0]), "Device") < 0 ||
-            varlink_variant_struct_set_uint16(device, "vendor_id", usb_device->id_vendor) < 0 ||
-            varlink_variant_struct_set_uint16(device, "product_id", usb_device->id_product) < 0 ||
-            varlink_variant_struct_set_uint8(device, "bus_nr", usb_device->busnum) < 0 ||
-            varlink_variant_struct_set_uint8(device, "device_nr", usb_device->devnum) < 0 ||
-            varlink_variant_struct_set_string(device, "product", usb_device->product ?: "") < 0 ||
-            varlink_variant_struct_set_string(device, "manufacturer", usb_device->manufacturer ?: "") < 0 ||
-            varlink_variant_struct_set_string(device, "serial", usb_device->serial ?: ""))
+        if (varlink_struct_new(&device) < 0 ||
+            varlink_struct_set_int(device, "vendor_id", usb_device->id_vendor) < 0 ||
+            varlink_struct_set_int(device, "product_id", usb_device->id_product) < 0 ||
+            varlink_struct_set_int(device, "bus_nr", usb_device->busnum) < 0 ||
+            varlink_struct_set_int(device, "device_nr", usb_device->devnum) < 0 ||
+            varlink_struct_set_string(device, "product", usb_device->product ?: "") < 0 ||
+            varlink_struct_set_string(device, "manufacturer", usb_device->manufacturer ?: "") < 0 ||
+            varlink_struct_set_string(device, "serial", usb_device->serial ?: ""))
                 return -EUCLEAN;
 
-        if (varlink_variant_new(&devices, varlink_connection_get_interface(connections[0]), "Device[]") < 0 ||
-            varlink_variant_array_append(devices, device))
+        if (varlink_array_new(&devices) < 0 || varlink_array_append_struct(devices, device) < 0)
                 return -EUCLEAN;
 
-        if (varlink_variant_new(&reply,
-                                varlink_connection_get_interface(connections[0]),
-                                "(event: string, devices: Device[])") < 0 ||
-            varlink_variant_struct_set_string(reply, "event", action) < 0 ||
-            varlink_variant_struct_set(reply, "devices", devices))
+        if (varlink_struct_new(&reply) < 0 ||
+            varlink_struct_set_string(reply, "event", action) < 0 ||
+            varlink_struct_set_array(reply, "devices", devices) < 0)
                 return -EUCLEAN;
 
         for (i = 0; i < n_connections; i++)
